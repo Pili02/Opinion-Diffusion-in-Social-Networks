@@ -1,103 +1,117 @@
 import numpy as np
-import random as rand
 import matplotlib.pyplot as plt
-from sklearn import mixture
 import copy
 from scipy.stats import multivariate_normal
 
 
 class GMM:
-    weights = []
-    means = []
-    covariances = []
-
     def __init__(self, n_components, n_features):
         self.n_components = n_components
         self.n_features = n_features
-        self.weights = np.zeros(n_components)
-        self.means = np.zeros((n_components, n_features))
-        self.covariances = np.zeros((n_components, n_features, n_features))
-
-    def normalize(self):
-        self.weights /= np.sum(self.weights)
+        self.weights = np.random.rand(n_components)
+        self.weights /= np.sum(self.weights)  # Normalize weights
+        self.means = np.random.rand(n_components, n_features) * 10  # Random means
+        self.covariances = np.array(
+            [np.eye(n_features) * np.random.rand() for _ in range(n_components)]
+        )  # Positive definite covariance matrices
 
     def sample(self):
+        """Samples a point from the mixture model."""
         component = np.random.choice(self.n_components, p=self.weights)
-
-        mean = self.means[component]
-        cov = self.covariances[component]
-        sample = np.random.multivariate_normal(mean, cov)
-
+        sample = np.random.multivariate_normal(
+            self.means[component], self.covariances[component]
+        )
         return sample, component
+
+    def update_gmm(self, dataset, num_iterations=100):
+        """Expectation-Maximization (EM) for GMM update."""
+        n_samples = dataset.shape[0]
+        if n_samples == 0:
+            return  # No data to update
+
+        epsilon = 1e-6  # Prevent division by zero
+
+        # E-M Algorithm
+        for _ in range(num_iterations):
+            # **E-step: Compute Responsibilities**
+            responsibilities = np.zeros((n_samples, self.n_components))
+            for idx, x_val in enumerate(dataset):
+                probs = np.array(
+                    [
+                        self.weights[k]
+                        * multivariate_normal.pdf(
+                            x_val, self.means[k], self.covariances[k]
+                        )
+                        for k in range(self.n_components)
+                    ]
+                )
+                sum_probs = np.sum(probs)
+                if sum_probs == 0:
+                    responsibilities[idx] = (
+                        np.ones(self.n_components) / self.n_components
+                    )  # Assign equal weights
+                else:
+                    responsibilities[idx] = probs / sum_probs
+
+            # **M-step: Update Parameters**
+            class_responsibilities = (
+                np.sum(responsibilities, axis=0) + epsilon
+            )  # Prevent division by zero
+            self.weights = class_responsibilities / n_samples
+            self.weights /= np.sum(self.weights)  # Normalize weights
+
+            for k in range(self.n_components):
+                weighted_sum = np.sum(
+                    responsibilities[:, k].reshape(-1, 1) * dataset, axis=0
+                )
+                self.means[k] = weighted_sum / class_responsibilities[k]
+
+                # Compute new covariance
+                diff = dataset - self.means[k]
+                weighted_cov = np.dot(
+                    (responsibilities[:, k].reshape(-1, 1) * diff).T, diff
+                )
+                self.covariances[k] = (
+                    weighted_cov / class_responsibilities[k]
+                    + np.eye(self.n_features) * epsilon
+                )  # Ensure positive-definiteness
 
 
 num_agents = 10
 num_features = 1
 n_components = 4
-alpha = 0.1
 num_iterations = 100
-max_cov_value = 5.0  # upper limit for covariances
-max_weight_value = 0.5  # upper limit for weights
-max_mean_value = 10.0  # upper limit for means
 
-# we will assign random values to these agents
-agents = [GMM(n_components, num_features) for i in range(num_agents)]
-
-for agent in agents:
-    agent.weights = np.random.rand(n_components)
-    # agent.weights = np.clip(
-    #     agent.weights, 0, max_weight_value
-    # )
-    agent.normalize()
-for agent in agents:
-    agent.means = np.random.rand(n_components, num_features) * max_mean_value
-for agent in agents:
-    agent.covariances = np.random.rand(n_components, num_features, num_features)
-    agent.covariances = np.array(
-        [np.dot(A, A.T) for A in agent.covariances]
-    )  # To create positive semi-definite matrices
-    # Now apply the upper limit
-    agent.covariances = np.clip(agent.covariances, 0, max_cov_value)
-
+# Initialize agents with GMMs
+agents = [GMM(n_components, num_features) for _ in range(num_agents)]
 
 remember_agents = []
-for num in range(num_iterations):
+for iteration in range(num_iterations):
     new_agents = []
     for i in range(num_agents):
-        # print("i: ", i)
         agent1 = copy.deepcopy(agents[i])
-        neibhoursOpinion = []
-        for j in range(num_agents):
-            if i == j:
-                continue
-            sample, component = agents[j].sample()
-            neibhoursOpinion.append(sample)
-        X = np.array(neibhoursOpinion)
-        r = np.zeros((len(X), agent1.n_components))
+        neighbors_opinion = []
 
-        # E-step: calculate responsibilities
-        for idx, x_val in enumerate(X):
-            probs = np.array(
-                [
-                    agent1.weights[k]
-                    * multivariate_normal.pdf(
-                        x_val, agent1.means[k], agent1.covariances[k]
-                    )
-                    for k in range(agent1.n_components)
-                ]
-            )
-            r[idx] = probs / np.sum(probs)
+        # Collect samples from all other agents
+        for j in range(num_agents):
+            if i != j:
+                sample, _ = agents[j].sample()
+                neighbors_opinion.append(sample)
+
+        neighbors_opinion = np.array(neighbors_opinion)
+        agent1.update_gmm(neighbors_opinion, num_iterations=100)  # Run EM for 100 steps
+        new_agents.append(agent1)
 
     remember_agents.append(new_agents)
     agents = new_agents
 
+# Plot the Evolution of Means Over Iterations**
 x_values = range(num_iterations)
 for j in range(num_agents):
-    y_values = [remember_agents[i][j].means[0] for i in range(num_iterations)]
+    y_values = [remember_agents[i][j].means[0][0] for i in range(num_iterations)]
     plt.plot(x_values, y_values, label=f"Agent {j + 1}")
 
 plt.xlabel("Iteration")
 plt.ylabel("Mean Value")
-
 plt.legend(title="Agents", loc="upper right")
 plt.show()
